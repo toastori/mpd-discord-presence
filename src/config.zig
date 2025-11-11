@@ -41,6 +41,7 @@ pub fn init(ally: Allocator, io: Io) !void {
 
 pub fn deinit(ally: Allocator) void {
     if (!zon_parsed) return;
+    ally.free(config.mpd_addr);
     ally.free(config.details);
     ally.free(config.state);
 }

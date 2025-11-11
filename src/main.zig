@@ -24,9 +24,8 @@ pub fn main() !void {
 
     defer global.deinit(ally, io);
 
-    config.init(ally, io) catch {
+    config.init(ally, io) catch
         std.log.warn("unable to read/get config file, default is used instead.", .{});
-    };
     defer config.deinit(ally);
 
     try juicy_main(ally, io);
