@@ -3,77 +3,110 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
+const Reader = Io.Reader;
 const Writer = Io.Writer;
 
 const Activity = @import("Activity.zig");
-const Socket = if (builtin.os.tag == .windows) Io.File else Io.net.Stream;
+const Stream = if (builtin.os.tag == .windows) Io.File else Io.net.Stream;
 
 const Client = @This();
 
 /// io stream to rpc server
-conn: Socket,
-/// client_id
-client_id: u64,
+conn: ?Stream = null,
 /// Process id
 pid: std.posix.pid_t,
-/// msg Queue
-msg_queue: Io.Queue(MsgQueueItem),
-
-/// Message Sending Loop future
-sender_work: ?Io.Future(Writer.Error!void),
+/// Discord Application ID
+client_id: u64,
+/// buffer for msg
+last_msg: MsgQueueItem = undefined,
 
 /// Initialize Client members and connection
-pub fn init(ally: Allocator, io: Io, client_id: u64) ConnectError!Client {
+pub fn new(client_id: u64) Client {
     return .{
-        .conn = try connect_rpc(ally, io),
-        .client_id = client_id,
         .pid = std.posix.getpid(),
-        .msg_queue = .init(&.{}),
-        .sender_work = undefined,
+        .client_id = client_id,
     };
 }
 
 pub const StartError =
-    error{ HandshakeFailed } ||
-    Io.ConcurrentError;
-pub fn start(self: *Client, io: Io) StartError!void {
+    error{HandshakeFailed} ||
+    ConnectError;
+pub fn start(self: *Client, ally: Allocator, io: Io) StartError!void {
+    self.conn = try connect_rpc(ally, io);
     self.handshake(io) catch return StartError.HandshakeFailed;
-
-    self.sender_work = try io.concurrent(sender, .{ io, self.conn, &self.msg_queue });
 }
 
-pub fn deinit(self: *Client, io: Io) void {
-    if (self.sender_work != null) self.sender_work.?.cancel(io) catch {};
-    self.conn.close(io);
+pub fn end(self: *Client, io: Io) void {
+    if (self.conn != null) self.conn.?.close(io);
 }
 
 /// Queue an activity update
-pub fn updateActivity(self: *Client, io: Io, activity: Activity) error{NoSpaceLeft}!void {
+pub fn updateActivity(self: Client, io: Io, activity: Activity, msg_queue: *Io.Queue(MsgQueueItem)) error{NoSpaceLeft}!void {
     var msg: [1024]u8 = undefined;
     std.mem.writeInt(u32, msg[0..4], 1, .little);
     const slice = try std.fmt.bufPrint(msg[8..],
         \\{{"cmd":"SET_ACTIVITY","nonce":"{b:032}","args":{{"pid":{d},"activity":{f}}}}}
     , .{ nonce(io), self.pid, activity });
     std.mem.writeInt(u32, msg[4..8], @intCast(slice.len), .little);
-    self.msg_queue.putOne(io, .{ .msg = msg, .len = @intCast(slice.len + 8) }) catch {};
+    msg_queue.putOne(io, .{ .msg = msg, .len = @intCast(slice.len + 8) }) catch {};
 }
 
 /// Queue an activity clear
-pub fn clearActivity(self: *Client, io: Io) void {
+pub fn clearActivity(self: Client, io: Io, msg_queue: *Io.Queue(MsgQueueItem)) void {
     var msg: [1024]u8 = undefined;
     std.mem.writeInt(u32, msg[0..4], 1, .little);
     const slice = std.fmt.bufPrint(msg[8..],
         \\{{"cmd":"SET_ACTIVITY","nonce":"{b:032}","args":{{"pid":{d}}}}}
-    , .{ nonce(io), self.pid}) catch unreachable;
+    , .{ nonce(io), self.pid }) catch unreachable;
     std.mem.writeInt(u32, msg[4..8], @intCast(slice.len), .little);
-    self.msg_queue.putOne(io, .{ .msg = msg, .len = @intCast(slice.len + 8) }) catch {};
+    msg_queue.putOne(io, .{ .msg = msg, .len = @intCast(slice.len + 8) }) catch {};
+}
+
+/// Message sending loop on receiving msg from queue
+pub fn sender(client: *Client, io: Io, msg_queue: *Io.Queue(MsgQueueItem)) Writer.Error!void {
+    std.debug.assert(client.conn != null);
+    var w_buf: [1024]u8 = undefined;
+    var conn_writer = client.conn.?.writer(io, &w_buf);
+    const w = &conn_writer.interface;
+
+    // clean up pending msg
+    try w.writeAll(client.last_msg.msg[0..client.last_msg.len]);
+    try w.flush();
+
+    while (true) {
+        client.last_msg = msg_queue.getOne(io) catch return;
+        try w.writeAll(client.last_msg.msg[0..client.last_msg.len]);
+        try w.flush();
+    }
+}
+
+pub fn reader(client: *Client, io: Io) Reader.Error!void {
+    std.debug.assert(client.conn != null);
+    var r_buf: [1024]u8 = undefined;
+    var conn_reader = client.conn.?.reader(io, &r_buf);
+    const r = &conn_reader.interface;
+
+    while (true) {
+        _ = try r.takeInt(u32, .little); // opcode
+        const msg_len = try r.takeInt(u32, .little);
+        r.toss(msg_len);
+    }
+}
+
+/// Used when discord did not connect and need to discard incoming msg queue
+pub fn idler(client: *Client, io: Io, msg_queue: *Io.Queue(MsgQueueItem)) void {
+    while (true) {
+        client.last_msg = msg_queue.getOne(io) catch return;
+    }
 }
 
 pub const ConnectError =
-    error { FileNotFound } || Allocator.Error;
+    error{FileNotFound} ||
+    Allocator.Error ||
+    Io.net.UnixAddress.InitError;
 /// Find the file descriptor and connect
-fn connect_rpc(ally: Allocator, io: Io) ConnectError!Socket {
-    if (builtin.os.tag == .windows) Socket.openAbsolute(
+fn connect_rpc(ally: Allocator, io: Io) ConnectError!Stream {
+    if (builtin.os.tag == .windows) Stream.openAbsolute(
         \\\\.\pipe\
     ); // TODO
 
@@ -94,7 +127,7 @@ fn connect_rpc(ally: Allocator, io: Io) ConnectError!Socket {
     for (0..10) |i| {
         const ua = Io.net.UnixAddress.init(
             std.fmt.bufPrint(&path_buffer, "{s}/discord-ipc-{d}", .{ tmp, i }) catch
-                @panic("runtime path too long"),
+                return Io.net.UnixAddress.InitError.NameTooLong,
         ) catch unreachable;
         return ua.connect(io) catch continue;
     }
@@ -103,8 +136,9 @@ fn connect_rpc(ally: Allocator, io: Io) ConnectError!Socket {
 
 /// Handshake with discord ipc (right after connection)
 fn handshake(self: Client, io: Io) Writer.Error!void {
+    std.debug.assert(self.conn != null);
     var buf: [128]u8 = undefined;
-    var conn_writer = self.conn.writer(io, &buf);
+    var conn_writer = self.conn.?.writer(io, &buf);
     const w = &conn_writer.interface;
 
     try w.writeInt(u32, 0, .little);
@@ -122,19 +156,6 @@ fn handshake(self: Client, io: Io) Writer.Error!void {
     try w.flush();
 }
 
-/// Separate loop sending activity updates
-fn sender(io: Io, conn: Socket, queue: *Io.Queue(MsgQueueItem)) Writer.Error!void {
-    var w_buf: [1024]u8 = undefined;
-    var conn_writer = conn.writer(io, &w_buf);
-    const w = &conn_writer.interface;
-
-    while (true) {
-        const data = queue.getOne(io) catch return;
-        try w.writeAll(data.msg[0..data.len]);
-        try w.flush();
-    }
-}
-
 fn nonce(io: Io) u32 {
     const Static = struct {
         var nonce: u32 = 0;
@@ -149,4 +170,4 @@ fn nonce(io: Io) u32 {
     return result;
 }
 
-const MsgQueueItem = struct { msg: [1024]u8, len: u16 };
+pub const MsgQueueItem = struct { msg: [1024]u8, len: u16 };

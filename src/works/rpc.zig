@@ -11,10 +11,12 @@ const config = @import("../config.zig");
 
 pub const MainError =
     error{ FormatterInitFailed, UnsupportedClock } ||
-    Allocator.Error;
-pub fn main(ally: Allocator, io: Io, queue: *Io.Queue(bool)) !void {
-    stop(io, queue);
-    var conn_retry_printed: bool = false;
+    DiscordWorkError;
+pub fn main(ally: Allocator, io: Io, signal_queue: *Io.Queue(bool)) !void {
+    stop(io, signal_queue);
+
+    var client = discord.Client.new(config.get().client_id);
+    var msg_queue: Io.Queue(discord.MsgQueueItem) = .init(&.{});
 
     var details: Formatter, var state: Formatter = blk: {
         var stderr_buf: [512]u8 = undefined;
@@ -38,25 +40,47 @@ pub fn main(ally: Allocator, io: Io, queue: *Io.Queue(bool)) !void {
     defer details.deinit(ally);
     defer state.deinit(ally);
 
-    while (true) {
-        var client = discord.Client.init(ally, io, config.get().client_id) catch |err| switch (err) {
-            discord.ConnectError.OutOfMemory => return MainError.OutOfMemory,
-            discord.ConnectError.FileNotFound => {
-                if (!conn_retry_printed)
-                    std.log.info("connection to discord failed, automatic reconnect every 10 seconds", .{});
-                conn_retry_printed = true;
-                io.sleep(.fromSeconds(10), .boot) catch |err2| switch (err2) {
-                    error.Canceled => return,
-                    else => return MainError.UnsupportedClock,
-                };
-                continue;
-            },
-        };
-        defer client.deinit(io);
+    var discord_work = try io.concurrent(discordWork, .{ ally, io, &client, &msg_queue });
+    defer discord_work.cancel(io) catch {};
+    var inner_work = try io.concurrent(queueingWork, .{ io, &client, &details, &state, signal_queue, &msg_queue });
+    defer inner_work.cancel(io) catch {};
 
-        client.start(io) catch {
-            if (!conn_retry_printed)
-                std.log.info("handshake with discord failed, automatic retry every 10 seconds", .{});
+    switch (io.select(.{
+        .discord = &discord_work,
+        .inner = &inner_work,
+    }) catch return) {
+        .discord => |ret| return ret,
+        .inner => |ret| return ret catch MainError.UnsupportedClock,
+    }
+}
+
+const DiscordWorkError =
+    error{ UnsupportedClock, NameTooLong } ||
+    Io.ConcurrentError ||
+    Allocator.Error;
+fn discordWork(
+    ally: Allocator,
+    io: Io,
+    client: *discord.Client,
+    msg_queue: *Io.Queue(discord.MsgQueueItem),
+) DiscordWorkError!void {
+    var conn_retry_printed: bool = false;
+    var idle_work: ?Io.Future(void) = null;
+    defer if (idle_work != null) idle_work.?.cancel(io);
+
+    while (true) {
+        client.start(ally, io) catch |err| {
+            switch (err) {
+                discord.StartError.OutOfMemory => return DiscordWorkError.OutOfMemory,
+                discord.StartError.NameTooLong => return DiscordWorkError.NameTooLong,
+                else => {},
+            }
+            if (!conn_retry_printed) switch (err) {
+                discord.StartError.HandshakeFailed => std.log.info("handshake with discord failed, automatic retry every 10 seconds", .{}),
+                discord.StartError.FileNotFound => std.log.info("connection to discord failed, automatic reconnect every 10 seconds", .{}),
+                else => unreachable,
+            };
+            if (idle_work != null) idle_work = try io.concurrent(discord.Client.idler, .{ client, io, msg_queue });
             conn_retry_printed = true;
             io.sleep(.fromSeconds(10), .boot) catch |err2| switch (err2) {
                 error.Canceled => return,
@@ -64,37 +88,40 @@ pub fn main(ally: Allocator, io: Io, queue: *Io.Queue(bool)) !void {
             };
             continue;
         };
+        defer client.end(io);
         conn_retry_printed = false;
-
-        var inner_work = try io.concurrent(innerWork, .{ io, &client, &details, &state, queue });
-        defer inner_work.cancel(io) catch {};
+        if (idle_work != null) idle_work.?.cancel(io);
 
         std.log.info("discord rpc connected", .{});
 
+        var sender = try io.concurrent(discord.Client.sender, .{client, io, msg_queue});
+        defer sender.cancel(io) catch {};
+        var reader = try io.concurrent(discord.Client.reader, .{client, io});
+        defer reader.cancel(io) catch {};
+
         switch (io.select(.{
-            .sender = &client.sender_work.?,
-            .inner = &inner_work,
+            .sender = &sender,
+            .reader = &reader,
         }) catch return) {
-            .sender => {
-                std.log.info("discord rpc disconnected", .{});
-                continue;
-            },
-            .inner => |ret| return ret catch MainError.UnsupportedClock,
+            .sender => |ret| if (!std.meta.isError(ret)) return,
+            .reader => |ret| if (!std.meta.isError(ret)) return,
         }
+        std.log.info("discord rpc disconnected", .{});
     }
 }
 
-fn innerWork(
+fn queueingWork(
     io: Io,
     client: *discord.Client,
     details: *Formatter,
     state: *Formatter,
-    queue: *Io.Queue(bool),
+    signal_queue: *Io.Queue(bool),
+    msg_queue: *Io.Queue(discord.MsgQueueItem),
 ) error{ UnsupportedClock, Unexpected }!void {
     while (true) {
-        inner(io, client, details, state, queue) catch |err| switch (err) {
-            InnerError.UnsupportedClock, InnerError.Unexpected => |e| return e,
-            InnerError.NoSpaceLeft => {
+        queueing(io, client, details, state, signal_queue, msg_queue) catch |err| switch (err) {
+            QueueingError.UnsupportedClock, QueueingError.Unexpected => |e| return e,
+            QueueingError.NoSpaceLeft => {
                 std.log.warn("activity too long to write, skipped", .{});
                 continue;
             },
@@ -103,20 +130,21 @@ fn innerWork(
     }
 }
 
-const InnerError =
+const QueueingError =
     error{ UnsupportedClock, Unexpected } ||
     std.fmt.BufPrintError;
-fn inner(
+fn queueing(
     io: Io,
     client: *discord.Client,
     details: *Formatter,
     state: *Formatter,
-    queue: *Io.Queue(bool),
-) InnerError!void {
+    signal_queue: *Io.Queue(bool),
+    msg_queue: *Io.Queue(discord.MsgQueueItem),
+) QueueingError!void {
     var details_buf: [1024]u8 = undefined;
     var state_buf: [1024]u8 = undefined;
 
-    while (queue.getOne(io) catch return) {
+    while (signal_queue.getOne(io) catch return) {
         const playinfo = blk: {
             global.playinfo_lock(io) catch return;
             defer global.playinfo_unlock(io);
@@ -127,7 +155,7 @@ fn inner(
         defer global.songinfo_unlock(io);
 
         if (playinfo.state == .stop) {
-            client.clearActivity(io);
+            client.clearActivity(io, msg_queue);
             continue;
         }
 
@@ -148,7 +176,7 @@ fn inner(
             .timestamps = .{ .start = start, .end = end },
         };
 
-        try client.updateActivity(io, activity);
+        try client.updateActivity(io, activity, msg_queue);
     }
 }
 
