@@ -13,8 +13,6 @@ pub const MainError =
     error{ FormatterInitFailed, UnsupportedClock } ||
     DiscordWorkError;
 pub fn main(ally: Allocator, io: Io, signal_queue: *Io.Queue(bool)) !void {
-    stop(io, signal_queue);
-
     var client = discord.Client.new(config.get().client_id);
     var msg_queue: Io.Queue(discord.MsgQueueItem) = .init(&.{});
 
@@ -177,44 +175,5 @@ fn queueing(
         };
 
         try client.updateActivity(io, activity, msg_queue);
-    }
-}
-
-fn stop(io: Io, queue: *Io.Queue(bool)) void {
-    const Handler = struct {
-        var _queue: *Io.Queue(bool) = undefined;
-        var _io: Io = undefined;
-
-        const quit = if (builtin.os.tag == .windows) quit_windows else quit_posix;
-
-        fn quit_posix(sig: std.c.SIG) callconv(.c) void {
-            if (sig == .TERM)
-                _queue.putOne(_io, false) catch {};
-        }
-
-        fn quit_windows(sig: u32) callconv(.c) c_int {
-            const signal: std.posix.SIG = @enumFromInt(sig);
-            while (signal != .TERM and signal != .BREAK) {} else {
-                _queue.putOne(_io, false) catch {};
-                return 0;
-            }
-        }
-    };
-
-    Handler._queue = queue;
-    Handler._io = io;
-
-    if (builtin.os.tag == .windows) {
-        std.os.windows.SetConsoleCtrlHandler(Handler.quit, true) catch {
-            std.log.err("seems like windows cannot handle signals", .{});
-            std.process.exit(1);
-        };
-    } else {
-        var handler: std.posix.Sigaction = .{
-            .handler = .{ .handler = Handler.quit },
-            .mask = std.posix.sigemptyset(),
-            .flags = 0,
-        };
-        std.posix.sigaction(.TERM, &handler, null);
     }
 }
