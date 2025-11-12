@@ -12,7 +12,7 @@ const mpd_main = @import("works/mpd.zig").main;
 const msg_queue_main = @import("works/msg_queue.zig").main;
 const rpc_main = @import("works/rpc.zig").main;
 
-pub fn main() !void {
+pub fn main() void {
     var debug_ally = if (builtin.mode == .Debug) std.heap.DebugAllocator(.{}).init else void{};
     defer if (@TypeOf(debug_ally) == std.heap.DebugAllocator(.{}))
         if (debug_ally.deinit() == .leak) std.debug.print("debug allocator: {d} leaks found\n", .{debug_ally.detectLeaks()});
@@ -31,7 +31,7 @@ pub fn main() !void {
         std.log.warn("unable to read/get config file, default is used instead.", .{});
     defer config.deinit(ally);
 
-    try juicy_main(ally, io);
+    juicy_main(ally, io) catch std.log.err("failed to spawn thread, lets wait for zig evented io :)", .{});
     std.log.info("exit peacefully", .{});
 }
 
