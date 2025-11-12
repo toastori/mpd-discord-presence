@@ -31,7 +31,10 @@ pub fn main() void {
         std.log.warn("unable to read/get config file, default is used instead.", .{});
     defer config.deinit(ally);
 
-    juicy_main(ally, io) catch std.log.err("failed to spawn thread, lets wait for zig evented io :)", .{});
+    juicy_main(ally, io) catch {
+        std.log.err("failed to spawn thread, lets wait for zig evented io :)", .{});
+        return;
+    };
     std.log.info("exit peacefully", .{});
 }
 
