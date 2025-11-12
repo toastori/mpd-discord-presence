@@ -12,7 +12,7 @@ const config = @import("../config.zig");
 pub const MainError =
     error{ FormatterInitFailed, UnsupportedClock } ||
     DiscordWorkError;
-pub fn main(ally: Allocator, io: Io, signal_queue: *Io.Queue(bool)) !void {
+pub fn main(ally: Allocator, io: Io, signal_queue: *Io.Queue(bool)) MainError!void {
     var client = discord.Client.new(config.get().client_id);
     var msg_queue: Io.Queue(discord.MsgQueueItem) = .init(&.{});
 

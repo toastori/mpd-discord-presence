@@ -8,7 +8,7 @@ const global = @import("../global.zig");
 const config = @import("../config.zig");
 
 pub const MainError = error { UnexpectedResponse, UnsupportedClock } || Allocator.Error;
-pub fn main(ally: Allocator, io: Io, queue: *Io.Queue(bool)) !void {
+pub fn main(ally: Allocator, io: Io, queue: *Io.Queue(bool)) MainError!void {
     var conn_retry_printed: bool = false;
 
     const socket = Io.net.UnixAddress.init(config.get().mpd_addr) catch
