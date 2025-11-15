@@ -17,7 +17,7 @@ pub fn assign(self: *@This(), key: []const u8, value: []const u8, song_changed: 
     } else if (std.mem.eql(u8, key, "songid")) {
         const new_songid = std.fmt.parseInt(u32, value, 10) catch
             std.debug.panic("unexpected unparsable number \"{s}\" in status.songid", .{value}); // TODO properly catch the errors
-        if (new_songid == self.song_id) song_changed.* = true;
+        if (new_songid != self.song_id) song_changed.* = true;
         self.song_id = new_songid;
     } else if (std.mem.eql(u8, key, "elapsed")) {
         const colon = std.mem.findScalarPos(u8, value, 0, '.') orelse
