@@ -8,6 +8,8 @@ const Formatter = @import("../formatter/Formatter.zig");
 const global = @import("../global.zig");
 const config = @import("../config.zig");
 
+const albumart_search = @import("albumart.zig").search;
+
 pub const MainError =
     error { UnsupportedClock, FormatterInitFailed } ||
     Allocator.Error;
@@ -41,7 +43,7 @@ pub fn main(
     defer state.deinit(ally);
 
     while (true) {
-        inner(io, client, &details, &state, signal_queue, msg_queue) catch |err| switch (err) {
+        inner(ally, io, client, &details, &state, signal_queue, msg_queue) catch |err| switch (err) {
             QueueingError.UnsupportedClock, QueueingError.Unexpected => return MainError.UnsupportedClock,
             QueueingError.NoSpaceLeft => {
                 std.log.warn("activity too long to write, skipped", .{});
@@ -56,6 +58,7 @@ const QueueingError =
 error{ UnsupportedClock, Unexpected } ||
     std.fmt.BufPrintError;
 fn inner(
+    ally: Allocator,
     io: Io,
     client: *discord.Client,
     details: *Formatter,
@@ -65,6 +68,11 @@ fn inner(
 ) QueueingError!void {
     var details_buf: [1024]u8 = undefined;
     var state_buf: [1024]u8 = undefined;
+    var large_img_buf: [512]u8 = undefined;
+
+    var albumart_work: ?Io.Future(void) = null;
+    defer if (albumart_work) |*work| work.cancel(io);
+    var albumart_searching_id: ?u32 = null;
 
     while (signal_queue.getOne(io) catch return) {
         const playinfo = blk: {
@@ -75,6 +83,15 @@ fn inner(
         };
         global.songinfo_lock(io) catch return;
         defer global.songinfo_unlock(io);
+
+        if (albumart_work) |*work| {
+            std.debug.assert(albumart_searching_id != null);
+            if (albumart_searching_id.? != playinfo.song_id) {
+                work.cancel(io);
+                albumart_work = null;
+                albumart_searching_id = null;
+            }
+        }
 
         if (playinfo.state == .stop) {
             client.clearActivity(io, msg_queue);
@@ -96,8 +113,18 @@ fn inner(
             .activity_type = .listening,
             .status_display_type = .state,
             .timestamps = .{ .start = start, .end = end },
+            .large_image = if (global.songinfo.musicbrainz) |mbz| switch (mbz) {
+                .release => |id| std.fmt.bufPrint(&large_img_buf, "https://coverartarchive.org/release/{s}/front", .{id}) catch unreachable,
+                .release_group => |id| std.fmt.bufPrint(&large_img_buf, "https://coverartarchive.org/release-group/{s}/front", .{id}) catch unreachable,
+            } else null,
         };
 
+        if (activity.large_image == null and albumart_work == null) {
+            albumart_work = io.concurrent(albumart_search, .{ally, io, signal_queue}) catch null;
+            albumart_searching_id = playinfo.song_id;
+        }
+
         try client.updateActivity(io, activity, msg_queue);
+
     }
 }

@@ -37,6 +37,9 @@ pub fn main() void {
         std.log.warn("unable to read/get config file, default is used instead.", .{});
     defer config.deinit(ally);
 
+    // Work one-time init resource
+    defer albumart_deinit();
+
     // Actual code start here
     juicy_main(ally, io) catch |err| {
         if (err == JuicyError.ConcurrencyUnavailable)

@@ -14,15 +14,18 @@ timestamps: struct { start: u64, end: u64 },
 activity_type: Type = .playing,
 /// Controls field being displayed in user status text in member list
 status_display_type: StatusDisplayType = .name,
+/// Asset Large Image
+large_image: ?[]const u8,
 
 pub fn format(self: Activity, w: *Writer) Writer.Error!void {
     try w.print(
-        \\{{"details":"{s}{s}","state":"{s}","timestamps":{{"start":{d},"end":{d}}},"type":{d},"status_display_type":{d}}}
+        \\{{"details":"{s}{s}","state":"{s}","timestamps":{{"start":{d},"end":{d}}},"type":{d},"status_display_type":{d}{s}{s}{s}}}
     , .{
         self.details,                           if (self.details.len < 2) "  " else "",
         self.state,                             self.timestamps.start,
         self.timestamps.end,                    @intFromEnum(self.activity_type),
-        @intFromEnum(self.status_display_type),
+        @intFromEnum(self.status_display_type), if (self.large_image != null) ",\"assets\":{\"large_image\":\"" else "",
+        self.large_image orelse "",             if (self.large_image != null) "\"}" else "",
     });
 }
 

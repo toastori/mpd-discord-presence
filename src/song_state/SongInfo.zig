@@ -21,6 +21,7 @@ discnumber: ?u16 = null,
 bits: ?Bits = null,
 channels: ?u16 = null,
 samplerate: ?u32 = null,
+musicbrainz: ?MusicBrainzID = null,
 
 pub fn artist(self: @This()) ?[]const u8 {
     return self.trackartist orelse self.albumartist orelse self.composer orelse self.performer;
@@ -70,6 +71,12 @@ pub fn getMetadata(self: @This(), metadata: Metadata) GetMetadataResult {
         .date => .{ .nullable_str = self.date },
         .directoryname => .{ .nullable_str = self.dirname() },
         .bits => .{ .nullable_str = if (self.bits) |bits| bits.format() else null },
+        .musicbrainz_releaseid,
+        .musicbrainz_releasegroupid,
+        => |id| .{ .nullable_str = if (self.musicbrainz) |mbz| switch (mbz) {
+            .release => |str| if (id == .musicbrainz_releaseid) str else null,
+            .release_group => |str| if (id == .musicbrainz_releasegroupid) str else null,
+        } else null },
         // nullable_u16
         .tracknumber => .{ .nullable_u16 = .{ .value = self.tracknumber, .width = 2 } },
         .discnumber => .{ .nullable_u16 = .{ .value = self.discnumber, .width = null } },
@@ -108,35 +115,13 @@ pub fn metadataIsNull(self: @This(), metadata: Metadata) bool {
 }
 
 pub fn assign(self: *@This(), ally: Allocator, str_buf: *std.ArrayList(u8), key: []const u8, value: []const u8) Allocator.Error!void {
-    const Keys = enum {
-        Artist,
-        AlbumArtist,
-        Composer,
-        Performer,
-        Album,
-        Label,
-        Title,
-        Genre,
-        Date,
-        Track,
-        Disc,
-        Format,
-        file,
-    };
-    const keys: std.StaticStringMap(Keys) = .initComptime(blk: {
-        var key_val: [@typeInfo(Keys).@"enum".fields.len]std.meta.Tuple(&.{ []const u8, Keys }) = undefined;
+    const Keys = enum { Artist, AlbumArtist, Composer, Performer, Album, Label, Title, Genre, Date, Track, Disc, Format, file, musicbrainz_albumid, musicbrainz_releasegroupid };
 
-        for (@typeInfo(Keys).@"enum".fields, 0..) |field, i|
-            key_val[i] = .{ field.name, @enumFromInt(field.value) };
-
-        break :blk key_val;
-    });
-
-    const key_enum = keys.get(key) orelse return;
+    const key_enum = std.meta.stringToEnum(Keys, key) orelse return;
     switch (key_enum) {
         .Format => {
             const colon1 = std.mem.findScalarPos(u8, value, 0, ':') orelse
-                @panic("unexpected colon not found in songinfo.format");
+                @panic("unexpected colon not found in songinfo.format"); // TODO properly catch the errors
             const colon2 = std.mem.lastIndexOfScalar(u8, value, ':') orelse unreachable;
 
             const samplerate: ?[]const u8, const bits: []const u8, const channels: []const u8 =
@@ -145,23 +130,21 @@ pub fn assign(self: *@This(), ally: Allocator, str_buf: *std.ArrayList(u8), key:
                 else
                     .{ value[0..colon1], value[colon1 + 1 .. colon2], value[colon2 + 1 ..] };
 
-            if (value[colon1 + 1] != '*') self.bits = Bits.get(bits) orelse
-                @panic("unexpected unparsable bits in songinfo.format");
-            if (value[colon2 + 1] != '*') self.channels = std.fmt.parseInt(u16, channels, 10) catch
-                @panic("unexpected unparsable channels in songinfo.format");
+            if (value[colon1 + 1] != '*') self.bits = Bits.get(bits);
+            if (value[colon2 + 1] != '*') self.channels = std.fmt.parseInt(u16, channels, 10) catch null;
 
             if (samplerate) |str| {
                 if (value[0] != '*') {
-                    self.samplerate = std.fmt.parseInt(u32, str, 10) catch
-                        @panic("unexpected unparsable number in songinfo.format");
-                    if (self.bits != null and self.bits == .dsd) self.samplerate.? *= 8; // MPD samplerate return in bytes for dsd
+                    self.samplerate = std.fmt.parseInt(u32, str, 10) catch null;
+                    if (self.bits != null and self.bits == .dsd and self.samplerate != null)
+                        self.samplerate.? *= 8; // MPD samplerate return in bytes for dsd
                 }
             } else if (self.bits != null and self.bits.?.isValuedDsd()) {
                 self.samplerate = self.bits.?.transformSamplerate();
-            } else @panic("unexpected unparsable samplerate in songinfo.format");
+            } else @panic("unexpected unparsable samplerate in songinfo.format"); // TODO properly catch the errors
         },
-        .Track => self.tracknumber = std.fmt.parseInt(u16, value, 10) catch return,
-        .Disc => self.discnumber = std.fmt.parseInt(u16, value, 10) catch return,
+        .Track => self.tracknumber = std.fmt.parseInt(u16, value, 10) catch null,
+        .Disc => self.discnumber = std.fmt.parseInt(u16, value, 10) catch null,
         else => {
             const start = str_buf.items.len;
             try str_buf.appendSlice(ally, value);
@@ -177,6 +160,8 @@ pub fn assign(self: *@This(), ally: Allocator, str_buf: *std.ArrayList(u8), key:
                 .Title => self.title = str_buf.items[start..],
                 .Genre => self.genre = str_buf.items[start..],
                 .Date => self.date = str_buf.items[start..],
+                .musicbrainz_albumid => self.musicbrainz = .{ .release = str_buf.items[start..] },
+                .musicbrainz_releasegroupid => self.musicbrainz = .{ .release_group = str_buf.items[start..] },
                 else => unreachable,
             }
         },
@@ -195,15 +180,6 @@ pub const Bits = enum(u8) {
     dsd256 = 32,
     dsd512 = 64,
 
-    const str_map: std.StaticStringMap(Bits) = .initComptime(blk: {
-        var key_val: [@typeInfo(Bits).@"enum".fields.len]std.meta.Tuple(&.{ []const u8, Bits }) = undefined;
-
-        for (@typeInfo(Bits).@"enum".fields, 0..) |field, i|
-            key_val[i] = .{ field.name, @enumFromInt(field.value) };
-
-        break :blk key_val;
-    });
-
     pub fn format(self: Bits) []const u8 {
         return switch (self) {
             .f => "float32",
@@ -212,7 +188,7 @@ pub const Bits = enum(u8) {
     }
 
     pub fn get(str: []const u8) ?Bits {
-        return str_map.get(str);
+        return std.meta.stringToEnum(Bits, str);
     }
 
     pub fn isValuedDsd(self: Bits) bool {
@@ -248,17 +224,15 @@ pub const Metadata = enum {
     filename_ext, // %filename_ext%
     directoryname, // %directoryname%
     path, // %path%
-
-    const str_map: std.StaticStringMap(Metadata) = .initComptime(blk: {
-        var key_val: [@typeInfo(Metadata).@"enum".fields.len]std.meta.Tuple(&.{ []const u8, Metadata }) = undefined;
-
-        for (@typeInfo(Metadata).@"enum".fields, 0..) |field, i|
-            key_val[i] = .{ field.name, @enumFromInt(field.value) };
-
-        break :blk key_val;
-    });
+    musicbrainz_releaseid, // %musicbrainz_releaseid%
+    musicbrainz_releasegroupid, // %musicbrainz_releasegroupid%
 
     pub fn get(str: []const u8) ?Metadata {
-        return str_map.get(str[1 .. str.len - 1]);
+        return std.meta.stringToEnum(Metadata, str[1 .. str.len - 1]);
     }
+};
+
+pub const MusicBrainzID = union(enum) {
+    release: []const u8,
+    release_group: []const u8,
 };

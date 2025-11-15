@@ -56,45 +56,25 @@ const InnerError =
     error { ReadFailed, WriteFailed, UnexpectedResponse } ||
     Allocator.Error;
 fn inner(ally: Allocator, io: Io, r: *Io.Reader, w: *Io.Writer, queue: *Io.Queue(bool)) InnerError!void {
-    var maybe_too_long_use: [512]u8 = undefined;
     while (true) {
-        global.reset(io);
-
+        // PlayInfo / Status
         try w.writeAll("status\n");
         try w.flush();
-        {
-            global.playinfo_lock(io) catch return;
-            defer global.playinfo_unlock(io);
+        const song_changed = global.updatePlayInfos(io, r) catch |err| switch (err) {
+            error.Canceled => return,
+            else => |e| return e,
+        };
 
-            while (r.takeDelimiter('\n') catch |err| switch (err) {
-                error.StreamTooLong => return InnerError.UnexpectedResponse,
-                error.ReadFailed => return InnerError.ReadFailed,
-            }) |line| {
-                if (std.mem.startsWith(u8, line, "ACK ")) @panic(line);
-                if (std.mem.startsWith(u8, line, "OK")) break;
-                global.updatePlayInfo(line);
-            }
+        // SongInfo / CurrentSong
+        if (song_changed) {
+            try w.writeAll("currentsong\n");
+            try w.flush();
+            global.updateSongInfos(ally, io, r) catch |err| switch (err) {
+                error.Canceled => return,
+                else => |e| return e,
+            };
         }
 
-        try w.writeAll("currentsong\n");
-        try w.flush();
-        {
-            global.songinfo_lock(io) catch return;
-            defer global.songinfo_unlock(io);
-
-            while (r.takeDelimiter('\n') catch |err| switch (err) {
-                error.StreamTooLong => blk: {
-                    const short = maybe_too_long_use[0..try r.readSliceShort(&maybe_too_long_use)];
-                    _ = try r.discardDelimiterExclusive('\n');
-                    break :blk short;
-                },
-                error.ReadFailed => return InnerError.ReadFailed,
-            }) |line| {
-                if (std.mem.startsWith(u8, line, "ACK ")) @panic(line);
-                if (std.mem.startsWith(u8, line, "OK")) break;
-                try global.updateSongInfo(ally, line);
-            }
-        }
         queue.putOne(io, true) catch return; // signify PlayInfo and SongInfo is ready, rpc should update
 
         try w.writeAll("idle player\n");

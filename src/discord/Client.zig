@@ -42,7 +42,7 @@ pub fn end(self: *Client, io: Io) void {
 
 /// Queue an activity update
 pub fn updateActivity(self: Client, io: Io, activity: Activity, msg_queue: *Io.Queue(MsgQueueItem)) error{NoSpaceLeft}!void {
-    var msg: [1024]u8 = undefined;
+    var msg: [4096]u8 = undefined;
     std.mem.writeInt(u32, msg[0..4], 1, .little);
     const slice = try std.fmt.bufPrint(msg[8..],
         \\{{"cmd":"SET_ACTIVITY","nonce":"{b:032}","args":{{"pid":{d},"activity":{f}}}}}
@@ -53,7 +53,7 @@ pub fn updateActivity(self: Client, io: Io, activity: Activity, msg_queue: *Io.Q
 
 /// Queue an activity clear
 pub fn clearActivity(self: Client, io: Io, msg_queue: *Io.Queue(MsgQueueItem)) void {
-    var msg: [1024]u8 = undefined;
+    var msg: [4096]u8 = undefined;
     std.mem.writeInt(u32, msg[0..4], 1, .little);
     const slice = std.fmt.bufPrint(msg[8..],
         \\{{"cmd":"SET_ACTIVITY","nonce":"{b:032}","args":{{"pid":{d}}}}}
@@ -174,4 +174,4 @@ fn nonce(io: Io) u32 {
     return result;
 }
 
-pub const MsgQueueItem = struct { msg: [1024]u8, len: u16 };
+pub const MsgQueueItem = struct { msg: [4096]u8, len: u16 };
