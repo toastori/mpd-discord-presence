@@ -83,14 +83,7 @@ fn readConfigFile(io: Io, envmap: *std.process.Environ.Map, file_buf: []u8) ![]c
 
     return app_config_dir.readFile(io, config_name, file_buf) catch |err| switch (err) {
         Io.Dir.ReadFileError.FileNotFound => {
-            const new_file = try app_config_dir.createFile(io, config_name, .{});
-            defer new_file.close(io);
-
-            var new_file_writer = new_file.writer(io, &.{});
-
-            try new_file_writer.interface.writeAll(default_conf);
-
-            // try app_config_dir.writeFile(io, .{ .sub_path = config_name, .data = default_conf, .flags = .{} });
+            try app_config_dir.writeFile(io, .{ .sub_path = config_name, .data = default_conf, .flags = .{} });
             return std.fmt.bufPrint(file_buf, "{s}", .{default_conf});
         },
         else => return err,
