@@ -14,34 +14,24 @@ const rpc_main = @import("works/rpc.zig").main;
 
 const albumart_deinit = @import("works/albumart.zig").deinit;
 
-pub fn main() void {
-    // Allocator
-    var debug_ally = if (builtin.mode == .Debug) std.heap.DebugAllocator(.{}).init else void{};
-    defer if (@TypeOf(debug_ally) == std.heap.DebugAllocator(.{}))
-        if (debug_ally.deinit() == .leak) std.debug.print("debug allocator: {d} leaks found\n", .{debug_ally.detectLeaks()});
-    const base_ally = if (builtin.mode == .Debug) debug_ally.allocator() else std.heap.smp_allocator;
+pub fn main(init: std.process.Init) void {
+    const gpa = init.gpa;
+    const io = init.io;
 
-    var threadsafe_ally = std.heap.ThreadSafeAllocator{ .child_allocator = base_ally };
+    var threadsafe_ally = std.heap.ThreadSafeAllocator{ .child_allocator = gpa };
     const ally = threadsafe_ally.allocator();
 
-    // Io
-    var threaded = std.Io.Threaded.init(ally);
-    defer threaded.deinit();
-    const io = threaded.io();
 
     // Global
     defer global.deinit(ally, io);
 
     // Config
-    config.init(ally, io) catch
+    config.init(ally, io, init.environ_map) catch
         std.log.warn("unable to read/get config file, default is used instead.", .{});
     defer config.deinit(ally);
 
-    // Work one-time init resource
-    defer albumart_deinit();
-
     // Actual code start here
-    juicy_main(ally, io) catch |err| {
+    inner_main(ally, io, init.environ_map) catch |err| {
         if (err == JuicyError.ConcurrencyUnavailable)
             std.log.err("failed to spawn thread, lets wait for zig evented io :)", .{});
         std.process.exit(1);
@@ -50,7 +40,7 @@ pub fn main() void {
 }
 
 const JuicyError = error{OtherError} || Io.ConcurrentError;
-fn juicy_main(ally: Allocator, io: Io) JuicyError!void {
+fn inner_main(ally: Allocator, io: Io, envmap: *std.process.Environ.Map) JuicyError!void {
     var signal_queue: Io.Queue(bool) = .init(&.{});
     var msg_queue: Io.Queue(discord.MsgQueueItem) = .init(&.{});
 
@@ -65,7 +55,7 @@ fn juicy_main(ally: Allocator, io: Io) JuicyError!void {
 
     while (true) {
         // The only one spawn to works from one connection, so handle it here
-        var rpc_works = rpc_main(ally, io, &client, &msg_queue) catch |err| switch (err) {
+        var rpc_works = rpc_main(io, envmap, &client, &msg_queue) catch |err| switch (err) {
             Io.ConcurrentError.ConcurrencyUnavailable => |e| return e,
             else => |e| {
                 std.log.err("mpd exits with error {t}", .{e});

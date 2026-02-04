@@ -6,27 +6,23 @@ const bufPrint = std.fmt.bufPrint;
 const global = @import("../global.zig");
 
 const mbz_rg = "https://musicbrainz.org/ws/2/release-group/?";
-const caa_rg = "https://coverartarchive.org/release-group/";
-
-var client: ?std.http.Client = null;
-var uri_buf: [1024]u8 = undefined;
-var buffer: [1024]u8 = undefined;
-
-pub fn deinit() void {
-    if (client != null) client.?.deinit();
-}
 
 pub fn search(ally: Allocator, io: Io, signal_queue: *Io.Queue(bool)) void {
-    // Init http client if haven't
-    if (client == null) client = .{ .allocator = ally, .io = io };
-    std.debug.assert(client != null);
+    var uri_buf: [1024]u8 = undefined;
+    var buffer: [1024]u8 = undefined;
 
     // Simply avoid musicbrainz rate limit
     io.sleep(.fromSeconds(1), .boot) catch return;
 
+    var arena: std.heap.ArenaAllocator = .init(ally);
+    defer arena.deinit();
+
+    var client: std.http.Client = .{ .allocator = arena.allocator(), .io = io };
+    defer client.deinit();
+
     var writer: FillingWriter = .init(&buffer);
 
-    const uri_raw = blk: {
+    const url = blk: {
         global.songinfo_lock(io) catch return;
         defer global.songinfo_unlock(io);
 
@@ -42,10 +38,11 @@ pub fn search(ally: Allocator, io: Io, signal_queue: *Io.Queue(bool)) void {
         ) catch return;
     };
 
-    const id_fetch = client.?.fetch(.{
+    const id_fetch = client.fetch(.{
         .method = .GET,
+        .keep_alive = false,
         .response_writer = &writer.interface,
-        .location = .{ .uri = std.Uri.parse(uri_raw) catch return },
+        .location = .{ .url = url },
     }) catch return;
     if (id_fetch.status.class() != .success) return;
 

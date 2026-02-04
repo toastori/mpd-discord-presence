@@ -22,7 +22,7 @@ pub fn main(
 ) MainError!void {
     var details: Formatter, var state: Formatter = blk: {
         var stderr_buf: [512]u8 = undefined;
-        var stderr = std.fs.File.stderr().writer(&stderr_buf);
+        var stderr = std.Io.File.stderr().writer(io, &stderr_buf);
 
         var first = Formatter.init(ally, config.get().details, &global.songinfo, &stderr.interface) catch |err| switch (err) {
             error.BufTooLong, error.ParseError => null,
@@ -125,6 +125,5 @@ fn inner(
         }
 
         try client.updateActivity(io, activity, msg_queue);
-
     }
 }

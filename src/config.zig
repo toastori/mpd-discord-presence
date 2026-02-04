@@ -19,10 +19,10 @@ const Config = struct {
     pub const default: Config = @import("default_config.zon");
 };
 
-pub fn init(ally: Allocator, io: Io) !void {
+pub fn init(ally: Allocator, io: Io, envmap: *std.process.Environ.Map) !void {
     var read_buf: [4096:0]u8 = undefined;
 
-    const config_file = try readConfigFile(ally, io, &read_buf);
+    const config_file = try readConfigFile(io, envmap,  &read_buf);
     const config_file_z: [:0]const u8 = if (config_file.len == 4096) &read_buf else blk: {
         std.debug.assert(config_file.len < 4096);
         read_buf[config_file.len] = 0;
@@ -50,16 +50,10 @@ pub fn get() Config {
     return config;
 }
 
-fn readConfigFile(ally: Allocator, io: Io, file_buf: []u8) ![]const u8 {
+fn readConfigFile(io: Io, envmap: *std.process.Environ.Map, file_buf: []u8) ![]const u8 {
     const app_name = "mpd-discord-presence";
     const config_name = "config.zon";
     const default_conf: []const u8 = @embedFile("default_config.zon");
-
-    var envmap = std.process.getEnvMap(ally) catch |err| switch (err) {
-        Allocator.Error.OutOfMemory => return Allocator.Error.OutOfMemory,
-        else => @panic("unexpected error"),
-    };
-    defer envmap.deinit();
 
     const config_home = if (builtin.os.tag == .windows) blk: {
         if (envmap.get("APPDATA")) |path|
@@ -84,16 +78,17 @@ fn readConfigFile(ally: Allocator, io: Io, file_buf: []u8) ![]const u8 {
     };
     defer config_home.close(io);
 
-    const app_config_dir = try config_home.makeOpenPath(io, app_name, .{});
+    const app_config_dir = try config_home.createDirPathOpen(io, app_name, .{});
     defer app_config_dir.close(io);
 
     return app_config_dir.readFile(io, config_name, file_buf) catch |err| switch (err) {
         Io.Dir.ReadFileError.FileNotFound => {
-            // TODO wait for zig update
-            const new_file: std.fs.File = .{ .handle = (try app_config_dir.createFile(io, config_name, .{})).handle };
-            defer new_file.close();
+            const new_file = try app_config_dir.createFile(io, config_name, .{});
+            defer new_file.close(io);
 
-            try new_file.writeAll(default_conf);
+            var new_file_writer = new_file.writer(io, &.{});
+
+            try new_file_writer.interface.writeAll(default_conf);
 
             // try app_config_dir.writeFile(io, .{ .sub_path = config_name, .data = default_conf, .flags = .{} });
             return std.fmt.bufPrint(file_buf, "{s}", .{default_conf});

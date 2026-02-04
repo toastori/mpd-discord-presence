@@ -17,8 +17,8 @@ const MainResult = struct {
     reader: Io.Future(Io.Reader.Error!void),
 };
 pub fn main(
-    ally: Allocator,
     io: Io,
+    envmap: *std.process.Environ.Map,
     client: *discord.Client,
     msg_queue: *Io.Queue(discord.MsgQueueItem),
 ) MainError!MainResult {
@@ -26,7 +26,7 @@ pub fn main(
     defer if (idle_work != null) idle_work.?.cancel(io);
 
     while (true) {
-        client.start(ally, io) catch |err| {
+        client.start(io, envmap) catch |err| {
             switch (err) {
                 discord.StartError.OutOfMemory => return MainError.OutOfMemory,
                 discord.StartError.NameTooLong => return MainError.NameTooLong,

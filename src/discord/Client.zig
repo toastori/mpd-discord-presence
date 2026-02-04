@@ -23,7 +23,7 @@ last_msg: MsgQueueItem = .{ .msg = undefined, .len = 0 },
 /// Initialize Client members and connection
 pub fn new(client_id: u64) Client {
     return .{
-        .pid = std.posix.getpid(),
+        .pid = std.posix.getppid(),
         .client_id = client_id,
     };
 }
@@ -31,8 +31,8 @@ pub fn new(client_id: u64) Client {
 pub const StartError =
     error{HandshakeFailed} ||
     ConnectError;
-pub fn start(self: *Client, ally: Allocator, io: Io) StartError!void {
-    self.conn = try connect_rpc(ally, io);
+pub fn start(self: *Client, io: Io, envmap: *std.process.Environ.Map) StartError!void {
+    self.conn = try connect_rpc(io, envmap);
     self.handshake(io) catch return StartError.HandshakeFailed;
 }
 
@@ -111,22 +111,15 @@ pub const ConnectError =
     Allocator.Error ||
     Io.net.UnixAddress.InitError;
 /// Find the file descriptor and connect
-fn connect_rpc(ally: Allocator, io: Io) ConnectError!Stream {
+fn connect_rpc(io: Io, envmap: *std.process.Environ.Map) ConnectError!Stream {
     if (builtin.os.tag == .windows) Stream.openAbsolute(
         \\\\.\pipe\
     ); // TODO
 
-    // Unix
-    var env = std.process.getEnvMap(ally) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => @panic("Unexpected error"),
-    };
-    defer env.deinit();
-
-    const tmp = env.get("XDG_RUNTIME_DIR") orelse
-        env.get("TMPDIR") orelse
-        env.get("TMP") orelse
-        env.get("TEMP") orelse
+    const tmp = envmap.get("XDG_RUNTIME_DIR") orelse
+        envmap.get("TMPDIR") orelse
+        envmap.get("TMP") orelse
+        envmap.get("TEMP") orelse
         "/tmp";
 
     var path_buffer: [108]u8 = undefined;
