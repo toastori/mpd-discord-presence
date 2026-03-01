@@ -27,7 +27,7 @@ pub fn main(init: std.process.Init) void {
     defer config.deinit(ally);
 
     // Actual code start here
-    inner_main(ally, io, init.environ_map) catch |err| {
+    innerMain(ally, io, init.environ_map) catch |err| {
         if (err == JuicyError.ConcurrencyUnavailable)
             std.log.err("failed to spawn thread, lets wait for zig evented io :)", .{});
         std.process.exit(1);
@@ -42,7 +42,7 @@ pub const MainSelectResult = union(enum) {
 };
 
 const JuicyError = error{OtherError} || Io.ConcurrentError;
-fn inner_main(ally: Allocator, io: Io, envmap: *std.process.Environ.Map) JuicyError!void {
+fn innerMain(ally: Allocator, io: Io, envmap: *std.process.Environ.Map) JuicyError!void {
     var signal_queue: Io.Queue(bool) = .init(&.{});
     var msg_queue: Io.Queue(discord.MsgQueueItem) = .init(&.{});
 
@@ -89,14 +89,14 @@ fn stop(io: Io, queue: *Io.Queue(bool)) void {
         var _queue: *Io.Queue(bool) = undefined;
         var _io: Io = undefined;
 
-        const quit = if (builtin.os.tag == .windows) quit_windows else quit_posix;
+        const quit = if (builtin.os.tag == .windows) quitWindows else quitPosix;
 
-        fn quit_posix(sig: std.c.SIG) callconv(.c) void {
+        fn quitPosix(sig: std.c.SIG) callconv(.c) void {
             if (sig == .TERM)
                 _queue.putOne(_io, false) catch {};
         }
 
-        fn quit_windows(sig: u32) callconv(.c) c_int {
+        fn quitWindows(sig: u32) callconv(.c) c_int {
             const signal: std.posix.SIG = @enumFromInt(sig);
             while (signal != .TERM and signal != .BREAK) {} else {
                 _queue.putOne(_io, false) catch {};

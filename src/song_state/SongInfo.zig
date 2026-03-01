@@ -27,7 +27,7 @@ pub fn artist(self: @This()) ?[]const u8 {
     return self.trackartist orelse self.albumartist orelse self.composer orelse self.performer;
 }
 
-pub fn album_artist_fallback(self: @This()) ?[]const u8 {
+pub fn albumArtistFallback(self: @This()) ?[]const u8 {
     return self.albumartist orelse self.trackartist orelse self.composer orelse self.performer;
 }
 
@@ -37,7 +37,7 @@ pub fn filename(self: @This()) []const u8 {
     return self.filepath[start..end];
 }
 
-pub fn filename_ext(self: @This()) []const u8 {
+pub fn filenameExt(self: @This()) []const u8 {
     const start = if (std.mem.lastIndexOfScalar(u8, self.filepath, DIR_SEPARATOR)) |s| s + 1 else 0;
     return self.filepath[start..];
 }
@@ -58,7 +58,7 @@ pub fn getMetadata(self: @This(), metadata: Metadata) GetMetadataResult {
         // str
         .path => .{ .str = self.filepath },
         .filename => .{ .str = self.filename() },
-        .filename_ext => .{ .str = self.filename_ext() },
+        .filename_ext => .{ .str = self.filenameExt() },
         // nullable_str
         .artist => .{ .nullable_str = self.trackartist orelse
             self.albumartist orelse

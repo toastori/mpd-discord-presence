@@ -23,20 +23,20 @@ pub fn deinit(ally: Allocator, io: Io) void {
 
 /// Reset global states to init (likely)
 pub fn reset(io: Io) void {
-    playinfo_lock(io) catch return;
-    defer playinfo_unlock(io);
-    songinfo_lock(io) catch return;
-    defer songinfo_unlock(io);
+    playinfoLock(io) catch return;
+    defer playinfoUnlock(io);
+    songinfoLock(io) catch return;
+    defer songinfoUnlock(io);
 
     playinfo = .{};
     songinfo = .{ .filepath = undefined };
     str_buf.clearRetainingCapacity();
 }
 
-pub fn playinfo_lock(io: Io) !void {
+pub fn playinfoLock(io: Io) !void {
     try playinfo_mutex.lock(io);
 }
-pub fn playinfo_unlock(io: Io) void {
+pub fn playinfoUnlock(io: Io) void {
     playinfo_mutex.unlock(io);
 }
 
@@ -44,8 +44,8 @@ pub const UpdatePlayInfoError =
     error{ Canceled, UnexpectedResponse, ReadFailed };
 /// Return true if song changes
 pub fn updatePlayInfos(io: Io, r: *Io.Reader) UpdatePlayInfoError!bool {
-    try playinfo_lock(io);
-    defer playinfo_unlock(io);
+    try playinfoLock(io);
+    defer playinfoUnlock(io);
 
     var song_changed: bool = false;
 
@@ -68,18 +68,18 @@ fn updatePlayInfoSingle(line: []const u8, song_changed: *bool) void {
     playinfo.assign(line[0..colon], line[colon + 2 ..], song_changed);
 }
 
-pub fn songinfo_lock(io: Io) !void {
+pub fn songinfoLock(io: Io) !void {
     try songinfo_mutex.lock(io);
 }
-pub fn songinfo_unlock(io: Io) void {
+pub fn songinfoUnlock(io: Io) void {
     songinfo_mutex.unlock(io);
 }
 
 pub const UpdateSongInfoError =
     error{ Canceled, ReadFailed } || Allocator.Error;
 pub fn updateSongInfos(ally: Allocator, io: Io, r: *Io.Reader) UpdateSongInfoError!void {
-    songinfo_lock(io) catch return;
-    defer songinfo_unlock(io);
+    songinfoLock(io) catch return;
+    defer songinfoUnlock(io);
 
     // reset
     str_buf.clearRetainingCapacity();
@@ -109,8 +109,8 @@ fn updateSongInfoSingle(ally: Allocator, line: []const u8) Allocator.Error!void 
 }
 
 pub fn addMusicBrainzReleaseGroup(ally: Allocator, io: Io, id: []const u8) (Allocator.Error || Io.Cancelable)!void {
-    try songinfo_lock(io);
-    defer songinfo_unlock(io);
+    try songinfoLock(io);
+    defer songinfoUnlock(io);
 
     const start = str_buf.items.len;
     try str_buf.appendSlice(ally, id);

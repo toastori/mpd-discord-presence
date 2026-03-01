@@ -23,8 +23,8 @@ pub fn search(ally: Allocator, io: Io, signal_queue: *Io.Queue(bool)) void {
     var writer: FillingWriter = .init(&buffer);
 
     const url = blk: {
-        global.songinfo_lock(io) catch return;
-        defer global.songinfo_unlock(io);
+        global.songinfoLock(io) catch return;
+        defer global.songinfoUnlock(io);
 
         if (global.songinfo.album == null) return;
 
@@ -33,7 +33,7 @@ pub fn search(ally: Allocator, io: Io, signal_queue: *Io.Queue(bool)) void {
             mbz_rg ++ "query=\"{f}\"+artist%3A\"{f}\"&limit=1&fmt=json",
             .{
                 PercentEncoder{ .str = global.songinfo.album },
-                PercentEncoder{ .str = global.songinfo.album_artist_fallback() },
+                PercentEncoder{ .str = global.songinfo.albumArtistFallback() },
             }
         ) catch return;
     };

@@ -35,7 +35,7 @@ pub const StartError =
     error{HandshakeFailed} ||
     ConnectError;
 pub fn start(self: *Client, io: Io, envmap: *std.process.Environ.Map) StartError!void {
-    self.conn = try connect_rpc(io, envmap);
+    self.conn = try connectRpc(io, envmap);
     self.handshake(io) catch return StartError.HandshakeFailed;
 }
 
@@ -106,7 +106,7 @@ pub const ConnectError =
     Allocator.Error ||
     Io.net.UnixAddress.InitError;
 /// Find the file descriptor and connect
-fn connect_rpc(io: Io, envmap: *std.process.Environ.Map) ConnectError!Stream {
+fn connectRpc(io: Io, envmap: *std.process.Environ.Map) ConnectError!Stream {
     if (builtin.os.tag == .windows) {
         var pipe =
             \\\\.\pipe\discord-ipc-0

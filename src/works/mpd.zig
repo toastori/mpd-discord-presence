@@ -37,7 +37,7 @@ pub fn main(ally: Allocator, io: Io, queue: *Io.Queue(bool)) MainError!void {
 
         std.log.info("mpd connected", .{});
 
-        inner(ally, io, r, w, queue) catch |err| switch (err) {
+        innerMain(ally, io, r, w, queue) catch |err| switch (err) {
             InnerError.OutOfMemory => return InnerError.OutOfMemory,
             InnerError.UnexpectedResponse => return InnerError.UnexpectedResponse,
             InnerError.ReadFailed, InnerError.WriteFailed => {
@@ -53,7 +53,7 @@ pub fn main(ally: Allocator, io: Io, queue: *Io.Queue(bool)) MainError!void {
 const InnerError =
     error{ ReadFailed, WriteFailed, UnexpectedResponse } ||
     Allocator.Error;
-fn inner(ally: Allocator, io: Io, r: *Io.Reader, w: *Io.Writer, queue: *Io.Queue(bool)) InnerError!void {
+fn innerMain(ally: Allocator, io: Io, r: *Io.Reader, w: *Io.Writer, queue: *Io.Queue(bool)) InnerError!void {
     while (true) {
         // PlayInfo / Status
         try w.writeAll("status\n");

@@ -43,7 +43,7 @@ pub fn main(
     defer state.deinit(ally);
 
     while (true) {
-        inner(ally, io, client, &details, &state, signal_queue, msg_queue) catch |err| switch (err) {
+        innerMain(ally, io, client, &details, &state, signal_queue, msg_queue) catch |err| switch (err) {
             QueueingError.UnsupportedClock, QueueingError.Unexpected => return MainError.UnsupportedClock,
             QueueingError.NoSpaceLeft => {
                 std.log.warn("activity too long to write, skipped", .{});
@@ -57,7 +57,7 @@ pub fn main(
 const QueueingError =
     error{ UnsupportedClock, Unexpected } ||
     std.fmt.BufPrintError;
-fn inner(
+fn innerMain(
     ally: Allocator,
     io: Io,
     client: *discord.Client,
@@ -76,13 +76,13 @@ fn inner(
 
     while (signal_queue.getOne(io) catch return) {
         const playinfo = blk: {
-            global.playinfo_lock(io) catch return;
-            defer global.playinfo_unlock(io);
+            global.playinfoLock(io) catch return;
+            defer global.playinfoUnlock(io);
 
             break :blk global.playinfo;
         };
-        global.songinfo_lock(io) catch return;
-        defer global.songinfo_unlock(io);
+        global.songinfoLock(io) catch return;
+        defer global.songinfoUnlock(io);
 
         if (albumart_work) |*work| {
             std.debug.assert(albumart_searching_id != null);
