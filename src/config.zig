@@ -15,6 +15,7 @@ const Config = struct {
     details: [:0]const u8,
     state: [:0]const u8,
     discord_display_type: StausDisplayType,
+    search_albumart: bool = true,
 
     pub const default: Config = @import("default_config.zon");
 };

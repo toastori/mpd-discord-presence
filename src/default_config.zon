@@ -4,4 +4,5 @@
     .details = "[[%discnumber%.]%tracknumber%. ]%title%",
     .state = "[%artist%][ - %album%]",
     .discord_display_type = .name, // .name, .details or .state
+    // .search_albumart = true,
 }

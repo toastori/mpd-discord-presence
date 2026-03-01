@@ -70,6 +70,7 @@ fn innerMain(
     var state_buf: [1024]u8 = undefined;
     var large_img_buf: [512]u8 = undefined;
 
+    const do_seatch_albumart = config.get().search_albumart;
     var albumart_work: ?Io.Future(void) = null;
     defer if (albumart_work) |*work| work.cancel(io);
     var albumart_searching_id: ?u32 = null;
@@ -119,7 +120,7 @@ fn innerMain(
             } else null,
         };
 
-        if (activity.large_image == null and albumart_work == null) {
+        if (do_seatch_albumart and activity.large_image == null and albumart_work == null) {
             albumart_work = io.concurrent(albumart_search, .{ ally, io, signal_queue }) catch null;
             albumart_searching_id = playinfo.song_id;
         }
