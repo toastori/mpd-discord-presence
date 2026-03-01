@@ -11,7 +11,7 @@ const config = @import("../config.zig");
 const albumart_search = @import("albumart.zig").search;
 
 pub const MainError =
-    error { UnsupportedClock, FormatterInitFailed } ||
+    error{ UnsupportedClock, FormatterInitFailed } ||
     Allocator.Error;
 pub fn main(
     ally: Allocator,
@@ -55,7 +55,7 @@ pub fn main(
 }
 
 const QueueingError =
-error{ UnsupportedClock, Unexpected } ||
+    error{ UnsupportedClock, Unexpected } ||
     std.fmt.BufPrintError;
 fn inner(
     ally: Allocator,
@@ -98,8 +98,8 @@ fn inner(
             continue;
         }
 
-        const now = try std.posix.clock_gettime(.REALTIME);
-        const start: u64 = @intCast(now.sec * std.time.ms_per_s - playinfo.elapsed);
+        const now: u64 = @bitCast(std.Io.Timestamp.now(io, .real).toMilliseconds());
+        const start: u64 = @intCast(now - playinfo.elapsed);
         const end: u64 = start + playinfo.duration;
 
         details.evaluate();
@@ -120,7 +120,7 @@ fn inner(
         };
 
         if (activity.large_image == null and albumart_work == null) {
-            albumart_work = io.concurrent(albumart_search, .{ally, io, signal_queue}) catch null;
+            albumart_work = io.concurrent(albumart_search, .{ ally, io, signal_queue }) catch null;
             albumart_searching_id = playinfo.song_id;
         }
 

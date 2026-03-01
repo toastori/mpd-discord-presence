@@ -7,21 +7,18 @@ const Stream = Io.net.Stream;
 const global = @import("../global.zig");
 const config = @import("../config.zig");
 
-pub const MainError = error { UnexpectedResponse, UnsupportedClock } || Allocator.Error;
+pub const MainError = error{ UnexpectedResponse, InvalidMpdAddr } || Allocator.Error;
 pub fn main(ally: Allocator, io: Io, queue: *Io.Queue(bool)) MainError!void {
     var conn_retry_printed: bool = false;
 
-    const socket = Io.net.UnixAddress.init(config.get().mpd_addr) catch
-        @panic("mpd address too long");
+    const addr = try classifyAddr(config.get().mpd_addr);
+
     while (true) {
-        const stream = socket.connect(io) catch |err| {
+        const stream = connectAddr(addr, io) catch |err| {
             if (!conn_retry_printed)
                 std.log.info("connection to mpd failed: {t}, automatic reconnect every 10 seconds", .{err});
             conn_retry_printed = true;
-            io.sleep(.fromSeconds(10), .boot) catch |err2| switch (err2) {
-                error.Canceled => return,
-                else => return MainError.UnsupportedClock,
-            };
+            io.sleep(.fromSeconds(10), .boot) catch return;
             continue;
         };
         defer stream.close(io);
@@ -41,20 +38,20 @@ pub fn main(ally: Allocator, io: Io, queue: *Io.Queue(bool)) MainError!void {
         std.log.info("mpd connected", .{});
 
         inner(ally, io, r, w, queue) catch |err| switch (err) {
-                InnerError.OutOfMemory => return InnerError.OutOfMemory,
-                InnerError.UnexpectedResponse => return InnerError.UnexpectedResponse,
-                InnerError.ReadFailed, InnerError.WriteFailed => {
-                    std.log.info("mpd disconnected", .{});
-                    global.reset(io); // so next connection can do everything correctly
-                    continue;
-                },
+            InnerError.OutOfMemory => return InnerError.OutOfMemory,
+            InnerError.UnexpectedResponse => return InnerError.UnexpectedResponse,
+            InnerError.ReadFailed, InnerError.WriteFailed => {
+                std.log.info("mpd disconnected", .{});
+                global.reset(io); // so next connection can do everything correctly
+                continue;
+            },
         };
         return; // not error, is peaceful return
     }
 }
 
 const InnerError =
-    error { ReadFailed, WriteFailed, UnexpectedResponse } ||
+    error{ ReadFailed, WriteFailed, UnexpectedResponse } ||
     Allocator.Error;
 fn inner(ally: Allocator, io: Io, r: *Io.Reader, w: *Io.Writer, queue: *Io.Queue(bool)) InnerError!void {
     while (true) {
@@ -76,7 +73,7 @@ fn inner(ally: Allocator, io: Io, r: *Io.Reader, w: *Io.Writer, queue: *Io.Queue
             };
         }
 
-        queue.putOne(io, true) catch return; // signify PlayInfo and SongInfo is ready, rpc should update
+        queue.putOne(io, true) catch return; // signify PlayInfo and SongInfo is ready, msg_queue should update
 
         try w.writeAll("idle player\n");
         try w.flush();
@@ -87,3 +84,42 @@ fn inner(ally: Allocator, io: Io, r: *Io.Reader, w: *Io.Writer, queue: *Io.Queue
         }
     }
 }
+
+fn classifyAddr(addr: []const u8) !Address {
+    if (addr.len == 0) return MainError.InvalidMpdAddr;
+    if (addr[0] == '/') return .{
+        .unix_socket = Io.net.UnixAddress.init(addr) catch return MainError.InvalidMpdAddr,
+    };
+
+    const colon = std.mem.findScalarLast(u8, addr, ':');
+    const location = addr[0 .. colon orelse addr.len];
+    const port: u16 = if (colon) |c|
+        std.fmt.parseInt(u16, addr[c + 1 ..], 10) catch return MainError.InvalidMpdAddr
+    else
+        6600;
+
+    const ip = Io.net.IpAddress.parse(location, port);
+
+    return if (ip) |ip_address| .{
+        .ip_address = ip_address,
+    } else |_| .{
+        .hostname = .{
+            .hostname = Io.net.HostName.init(location) catch return MainError.InvalidMpdAddr,
+            .port = port,
+        },
+    };
+}
+
+fn connectAddr(addr: Address, io: Io) !Stream {
+    return switch (addr) {
+        .unix_socket => |a| a.connect(io),
+        .ip_address => |a| a.connect(io, .{ .mode = .stream }),
+        .hostname => |a| a.hostname.connect(io, a.port, .{ .mode = .stream }),
+    };
+}
+
+const Address = union(enum) {
+    unix_socket: Io.net.UnixAddress,
+    ip_address: Io.net.IpAddress,
+    hostname: struct { hostname: Io.net.HostName, port: u16 },
+};

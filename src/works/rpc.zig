@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
+const MainSelectResult = @import("../main.zig").MainSelectResult;
 
 const discord = @import("../discord.zig");
 
@@ -18,10 +19,11 @@ const MainResult = struct {
 };
 pub fn main(
     io: Io,
+    select: *Io.Select(MainSelectResult),
     envmap: *std.process.Environ.Map,
     client: *discord.Client,
     msg_queue: *Io.Queue(discord.MsgQueueItem),
-) MainError!MainResult {
+) MainError!void {
     var idle_work: ?Io.Future(void) = null;
     defer if (idle_work != null) idle_work.?.cancel(io);
 
@@ -40,7 +42,7 @@ pub fn main(
             if (idle_work == null) idle_work = try io.concurrent(discord.Client.idler, .{ client, io, msg_queue });
             io.sleep(.fromSeconds(10), .boot) catch |err2| switch (err2) {
                 error.Canceled => return undefined,
-                else => return MainError.UnsupportedClock,
+                // else => return MainError.UnsupportedClock,
             };
             continue;
         };
@@ -54,11 +56,5 @@ pub fn main(
 
     std.log.info("discord rpc connected", .{});
 
-    var sender = try io.concurrent(discord.Client.sender, .{ client, io, msg_queue });
-    errdefer sender.cancel(io) catch {};
-
-    return .{
-        .sender = sender,
-        .reader = try io.concurrent(discord.Client.reader, .{ client, io }),
-    };
+    try select.concurrent(.rpc_sender, discord.Client.sender, .{ client, io, msg_queue });
 }

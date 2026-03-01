@@ -15,12 +15,8 @@ const rpc_main = @import("works/rpc.zig").main;
 const albumart_deinit = @import("works/albumart.zig").deinit;
 
 pub fn main(init: std.process.Init) void {
-    const gpa = init.gpa;
+    const ally = init.gpa;
     const io = init.io;
-
-    var threadsafe_ally = std.heap.ThreadSafeAllocator{ .child_allocator = gpa };
-    const ally = threadsafe_ally.allocator();
-
 
     // Global
     defer global.deinit(ally, io);
@@ -39,23 +35,31 @@ pub fn main(init: std.process.Init) void {
     std.log.info("exit peacefully", .{});
 }
 
+pub const MainSelectResult = union(enum) {
+    mpd: @typeInfo(@TypeOf(mpd_main)).@"fn".return_type.?,
+    msg_queue: @typeInfo(@TypeOf(msg_queue_main)).@"fn".return_type.?,
+    rpc_sender: @typeInfo(@TypeOf(discord.Client.sender)).@"fn".return_type.?,
+};
+
 const JuicyError = error{OtherError} || Io.ConcurrentError;
 fn inner_main(ally: Allocator, io: Io, envmap: *std.process.Environ.Map) JuicyError!void {
     var signal_queue: Io.Queue(bool) = .init(&.{});
     var msg_queue: Io.Queue(discord.MsgQueueItem) = .init(&.{});
 
+    var select_buf: [4]MainSelectResult = undefined;
+    var select: Io.Select(MainSelectResult) = .init(io, &select_buf);
+    defer select.cancel();
+
     if (builtin.mode == .Debug) stop(io, &signal_queue);
 
     var client: discord.Client = .new(config.get().client_id);
 
-    var mpd_work = try io.concurrent(mpd_main, .{ ally, io, &signal_queue });
-    defer mpd_work.cancel(io) catch {};
-    var msg_queue_work = try io.concurrent(msg_queue_main, .{ ally, io, &client, &signal_queue, &msg_queue });
-    defer msg_queue_work.cancel(io) catch {};
+    try select.concurrent(.mpd, mpd_main, .{ ally, io, &signal_queue });
+    try select.concurrent(.msg_queue, msg_queue_main, .{ ally, io, &client, &signal_queue, &msg_queue });
 
     while (true) {
         // The only one spawn to works from one connection, so handle it here
-        var rpc_works = rpc_main(io, envmap, &client, &msg_queue) catch |err| switch (err) {
+        rpc_main(io, &select, envmap, &client, &msg_queue) catch |err| switch (err) {
             Io.ConcurrentError.ConcurrencyUnavailable => |e| return e,
             else => |e| {
                 std.log.err("mpd exits with error {t}", .{e});
@@ -63,17 +67,9 @@ fn inner_main(ally: Allocator, io: Io, envmap: *std.process.Environ.Map) JuicyEr
             },
         };
         defer client.end(io); // defer .end here because client .start in rpc_main
-        defer rpc_works.sender.cancel(io) catch {};
-        defer rpc_works.reader.cancel(io) catch {};
 
-        switch (io.select(.{
-            .rpc_sender = &rpc_works.sender,
-            .rpc_reader = &rpc_works.reader,
-            .mpd = &mpd_work,
-            .msg_queue = &msg_queue_work,
-        }) catch unreachable) {
+        switch (select.await() catch unreachable) {
             .rpc_sender => |ret| ret catch continue, // the reason to handle them here is they fail softly
-            .rpc_reader => |ret| ret catch continue, // the reason to handle them here is they fail softly
             // Following 2 fail hardly
             .mpd => |ret| return ret catch |err| {
                 std.log.err("mpd exits with error {t}", .{err});
@@ -113,10 +109,10 @@ fn stop(io: Io, queue: *Io.Queue(bool)) void {
     Handler._io = io;
 
     if (builtin.os.tag == .windows) {
-        std.os.windows.SetConsoleCtrlHandler(Handler.quit, true) catch {
-            std.log.err("seems like windows cannot handle signals", .{});
-            std.process.exit(1);
-        };
+        // std.os.windows.SetConsoleCtrlHandler(Handler.quit, true) catch {
+        //     std.log.err("seems like windows cannot handle signals", .{});
+        //     std.process.exit(1);
+        // };
     } else {
         var handler: std.posix.Sigaction = .{
             .handler = .{ .handler = Handler.quit },

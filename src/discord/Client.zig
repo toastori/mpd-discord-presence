@@ -14,7 +14,7 @@ const Client = @This();
 /// io stream to rpc server
 conn: ?Stream = null,
 /// Process id
-pid: std.posix.pid_t,
+pid: if (builtin.os.tag == .windows) usize else std.posix.pid_t,
 /// Discord Application ID
 client_id: u64,
 /// buffer for msg
@@ -23,7 +23,10 @@ last_msg: MsgQueueItem = .{ .msg = undefined, .len = 0 },
 /// Initialize Client members and connection
 pub fn new(client_id: u64) Client {
     return .{
-        .pid = std.posix.getppid(),
+        .pid = if (builtin.os.tag == .windows)
+            @intFromPtr(std.c.getpid()) >> 2
+        else
+            std.c.getpid(),
         .client_id = client_id,
     };
 }
@@ -63,13 +66,17 @@ pub fn clearActivity(self: Client, io: Io, msg_queue: *Io.Queue(MsgQueueItem)) v
 }
 
 /// Message sending loop on receiving msg from queue
-pub fn sender(client: *Client, io: Io, msg_queue: *Io.Queue(MsgQueueItem)) Writer.Error!void {
+pub fn sender(client: *Client, io: Io, msg_queue: *Io.Queue(MsgQueueItem)) (Writer.Error || Reader.Error)!void {
     std.debug.assert(client.conn != null);
     errdefer std.log.info("discord rpc disconnected", .{});
 
     var w_buf: [1024]u8 = undefined;
     var conn_writer = client.conn.?.writer(io, &w_buf);
     const w = &conn_writer.interface;
+
+    var r_buf: [1024]u8 = undefined;
+    var conn_reader = client.conn.?.reader(io, &r_buf);
+    const r = &conn_reader.interface;
 
     // clean up pending msg
     try w.writeAll(client.last_msg.msg[0..client.last_msg.len]);
@@ -79,23 +86,11 @@ pub fn sender(client: *Client, io: Io, msg_queue: *Io.Queue(MsgQueueItem)) Write
         client.last_msg = msg_queue.getOne(io) catch return;
         try w.writeAll(client.last_msg.msg[0..client.last_msg.len]);
         try w.flush();
-    }
-}
 
-pub fn reader(client: *Client, io: Io) Reader.Error!void {
-    std.debug.assert(client.conn != null);
-    errdefer std.log.info("discord rpc disconnected", .{});
-
-    var r_buf: [1024]u8 = undefined;
-    var conn_reader = client.conn.?.reader(io, &r_buf);
-    const r = &conn_reader.interface;
-
-    while (true) {
-        _ = try r.takeInt(u32, .little); // opcode
+        const op = try r.takeInt(u32, .little); // opcode
         const msg_len = try r.takeInt(u32, .little);
         const msg = try r.take(msg_len);
-        if (std.mem.eql(u8, msg[8..][0..5], "ERROR"))
-            std.log.err("discord: {s}", .{msg});
+        if (op > 4) std.log.err("discord: {s}", .{msg});
     }
 }
 
@@ -112,9 +107,19 @@ pub const ConnectError =
     Io.net.UnixAddress.InitError;
 /// Find the file descriptor and connect
 fn connect_rpc(io: Io, envmap: *std.process.Environ.Map) ConnectError!Stream {
-    if (builtin.os.tag == .windows) Stream.openAbsolute(
-        \\\\.\pipe\
-    ); // TODO
+    if (builtin.os.tag == .windows) {
+        var pipe =
+            \\\\.\pipe\discord-ipc-0
+        .*;
+        while (pipe[pipe.len - 1] <= '9') : (pipe[pipe.len - 1] += 1) {
+            return std.Io.Dir.openFileAbsolute(
+                io,
+                &pipe,
+                .{ .mode = .read_write },
+            ) catch continue;
+        }
+        return ConnectError.FileNotFound;
+    }
 
     const tmp = envmap.get("XDG_RUNTIME_DIR") orelse
         envmap.get("TMPDIR") orelse
@@ -134,11 +139,16 @@ fn connect_rpc(io: Io, envmap: *std.process.Environ.Map) ConnectError!Stream {
 }
 
 /// Handshake with discord ipc (right after connection)
-fn handshake(self: Client, io: Io) Writer.Error!void {
+fn handshake(self: Client, io: Io) (Writer.Error || Reader.Error)!void {
     std.debug.assert(self.conn != null);
+
     var buf: [128]u8 = undefined;
     var conn_writer = self.conn.?.writer(io, &buf);
     const w = &conn_writer.interface;
+
+    var r_buf: [1024]u8 = undefined;
+    var conn_reader = self.conn.?.reader(io, &r_buf);
+    const r = &conn_reader.interface;
 
     try w.writeInt(u32, 0, .little);
     try w.writeInt(
@@ -153,6 +163,11 @@ fn handshake(self: Client, io: Io) Writer.Error!void {
         \\{{"v":1,"client_id":"{d}"}}
     , .{self.client_id});
     try w.flush();
+
+    const op = try r.takeInt(u32, .little); // opcode
+    const msg_len = try r.takeInt(u32, .little);
+    const msg = try r.take(msg_len);
+    if (op > 4) std.log.info("discord handshake failed with response: {s}", .{msg});
 }
 
 fn nonce(io: Io) u32 {
