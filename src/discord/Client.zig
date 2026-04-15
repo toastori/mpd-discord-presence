@@ -24,9 +24,9 @@ last_msg: MsgQueueItem = .{ .msg = undefined, .len = 0 },
 pub fn new(client_id: u64) Client {
     return .{
         .pid = if (builtin.os.tag == .windows)
-            @intFromPtr(std.c.getpid()) >> 2
+            @intFromPtr(std.posix.system.getpid()) >> 2
         else
-            std.c.getpid(),
+            std.posix.system.getpid(),
         .client_id = client_id,
     };
 }

@@ -48,7 +48,7 @@ fn innerMain(ally: Allocator, io: Io, envmap: *std.process.Environ.Map) JuicyErr
 
     var select_buf: [4]MainSelectResult = undefined;
     var select: Io.Select(MainSelectResult) = .init(io, &select_buf);
-    defer select.cancel();
+    defer _ = select.cancel();
 
     if (builtin.mode == .Debug) stop(io, &signal_queue);
 

@@ -40,7 +40,6 @@ pub fn search(ally: Allocator, io: Io, signal_queue: *Io.Queue(bool)) void {
 
     const id_fetch = client.fetch(.{
         .method = .GET,
-        .keep_alive = false,
         .response_writer = &writer.interface,
         .location = .{ .url = url },
     }) catch return;

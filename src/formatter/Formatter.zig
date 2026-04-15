@@ -96,7 +96,7 @@ test "title format parser" {
 
     var stdout_buf: [4096]u8 = undefined;
     var stdout_file = std.fs.File.stdout().writer(&stdout_buf);
-    var stdout = stdout_file.interface;
+    var stdout = &stdout_file.interface;
 
     var al: std.ArrayList(u8) = .empty;
     defer al.deinit(allocator);

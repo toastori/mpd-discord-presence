@@ -38,8 +38,8 @@ pub fn main(ally: Allocator, io: Io, queue: *Io.Queue(bool)) MainError!void {
         std.log.info("mpd connected", .{});
 
         innerMain(ally, io, r, w, queue) catch |err| switch (err) {
-            InnerError.OutOfMemory => return InnerError.OutOfMemory,
-            InnerError.UnexpectedResponse => return InnerError.UnexpectedResponse,
+            InnerError.OutOfMemory => return MainError.OutOfMemory,
+            InnerError.UnexpectedResponse => return MainError.UnexpectedResponse,
             InnerError.ReadFailed, InnerError.WriteFailed => {
                 std.log.info("mpd disconnected", .{});
                 global.reset(io); // so next connection can do everything correctly
