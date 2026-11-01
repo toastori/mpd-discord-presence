@@ -15,19 +15,23 @@ const rpc_main = @import("works/rpc.zig").main;
 const albumart_deinit = @import("works/albumart.zig").deinit;
 
 pub fn main(init: std.process.Init) void {
-    const ally = init.gpa;
+    const gpa = init.gpa;
     const io = init.io;
 
+    var arena_allocator: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
     // Global
-    defer global.deinit(ally, io);
+    defer global.deinit(gpa, io);
 
     // Config
-    config.init(ally, io, init.environ_map) catch
+    config.init(gpa, arena, io, init.environ_map) catch
         std.log.warn("unable to read/get config file, default is used instead.", .{});
-    defer config.deinit(ally);
+    defer config.deinit(gpa);
 
     // Actual code start here
-    innerMain(ally, io, init.environ_map) catch |err| {
+    innerMain(gpa, io, init.environ_map) catch |err| {
         if (err == JuicyError.ConcurrencyUnavailable)
             std.log.err("failed to spawn thread, lets wait for zig evented io :)", .{});
         std.process.exit(1);
@@ -50,7 +54,7 @@ fn innerMain(ally: Allocator, io: Io, envmap: *std.process.Environ.Map) JuicyErr
     var select: Io.Select(MainSelectResult) = .init(io, &select_buf);
     defer _ = select.cancel();
 
-    if (builtin.mode == .Debug) stop(io, &signal_queue);
+    if (builtin.mode == .debug) stop(io, &signal_queue);
 
     var client: discord.Client = .new(config.get().client_id);
 

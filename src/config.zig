@@ -20,7 +20,7 @@ const Config = struct {
     pub const default: Config = @import("default_config.zon");
 };
 
-pub fn init(ally: Allocator, io: Io, envmap: *std.process.Environ.Map) !void {
+pub fn init(gpa: Allocator, arena: Allocator, io: Io, envmap: *std.process.Environ.Map) !void {
     var read_buf: [4096:0]u8 = undefined;
 
     const config_file = try readConfigFile(io, envmap,  &read_buf);
@@ -30,12 +30,13 @@ pub fn init(ally: Allocator, io: Io, envmap: *std.process.Environ.Map) !void {
         break :blk @ptrCast(read_buf[0..config_file.len]);
     };
 
-    var diag: zon.parse.Diagnostics = .{};
-    defer diag.deinit(ally);
-
-    config = zon.parse.fromSliceAlloc(Config, ally, config_file_z, &diag, .{}) catch |err| switch (err) {
-        error.ParseZon => std.debug.panic("{f}\n", .{diag}),
-        else => return err,
+    var diag: zon.parse.Diagnostics = undefined;
+    config = zon.parse.fromSlice(
+        Config,
+        .{ .gpa = gpa, .arena = arena, .source = config_file_z, .diagnostics = &diag, .ignore_unknown_fields = true }
+    ) catch |err| switch (err) {
+        error.ParseZon => std.debug.panic("{f}\n", .{diag.fmt("config_file.zon")}),
+        else => |e| return e,
     };
     zon_parsed = true;
 }

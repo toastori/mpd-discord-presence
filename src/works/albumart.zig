@@ -60,7 +60,7 @@ const PercentEncoder = struct {
     pub fn format(self: @This(), w: *Io.Writer) Io.Writer.Error!void {
         if (self.str == null) return;
         for (self.str.?) |c| {
-            if (std.mem.containsAtLeastScalar2(u8, "+-!(){}[]^\"~*?:\\/", c, 1))
+            if (std.mem.containsAtLeastScalar(u8, "+-!(){}[]^\"~*?:\\/", c, 1))
                 try w.writeAll("%5c");
             switch (c) {
                 'a'...'z',
