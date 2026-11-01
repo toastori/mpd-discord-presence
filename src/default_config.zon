@@ -2,7 +2,8 @@
     .mpd_addr = "localhost:6600",
     // .client_id = // u64,
     .details = "[[%discnumber%.]%tracknumber%. ]%title%",
-    .state = "[%artist%][ - %album%]",
+    .state = "[%artist%]",
+    .state_line2 = "[%album%]", // can ignore
     .discord_display_type = .name, // .name, .details or .state
     // .search_albumart = true,
 }

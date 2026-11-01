@@ -14,6 +14,7 @@ const Config = struct {
     client_id: u64 = 1435159974421725214,
     details: [:0]const u8,
     state: [:0]const u8,
+    state_line2: ?[:0]const u8 = null,
     discord_display_type: StausDisplayType,
     search_albumart: bool = true,
 
@@ -42,13 +43,6 @@ pub fn init(gpa: Allocator, arena: Allocator, io: Io, envmap: *std.process.Envir
         else => |e| return e,
     };
     zon_parsed = true;
-}
-
-pub fn deinit(ally: Allocator) void {
-    if (!zon_parsed) return;
-    ally.free(config.mpd_addr);
-    ally.free(config.details);
-    ally.free(config.state);
 }
 
 pub fn get() Config {

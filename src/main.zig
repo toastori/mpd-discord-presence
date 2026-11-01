@@ -28,7 +28,6 @@ pub fn main(init: std.process.Init) void {
     // Config
     config.init(gpa, arena, io, init.environ_map) catch
         std.log.warn("unable to read/get config file, default is used instead.", .{});
-    defer config.deinit(gpa);
 
     // Actual code start here
     innerMain(gpa, io, init.environ_map) catch |err| {

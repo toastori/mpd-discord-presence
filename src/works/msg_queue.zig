@@ -20,7 +20,7 @@ pub fn main(
     signal_queue: *Io.Queue(bool),
     msg_queue: *Io.Queue(discord.MsgQueueItem),
 ) MainError!void {
-    var details: Formatter, var state: Formatter = blk: {
+    var details: Formatter, var state: Formatter, var state_l2: ?Formatter = blk: {
         var stderr_buf: [512]u8 = undefined;
         var stderr = std.Io.File.stderr().writer(io, &stderr_buf);
 
@@ -34,16 +34,25 @@ pub fn main(
             error.OutOfMemory => return MainError.OutOfMemory,
         };
         errdefer if (second != null) second.?.deinit(ally);
+        var third = if (config.get().state_line2) |state_line2|
+            Formatter.init(ally, state_line2, &global.songinfo, &stderr.interface) catch |err| switch (err) {
+                error.BufTooLong, error.ParseError => return MainError.FormatterInitFailed,
+                error.OutOfMemory => return MainError.OutOfMemory,
+            } else null;
+        errdefer if (third != null) third.?.deinit(ally);
 
         stderr.interface.flush() catch {};
         if (first == null or second == null) return MainError.FormatterInitFailed;
-        break :blk .{ first.?, second.? };
+        break :blk .{ first.?, second.?, third };
     };
     defer details.deinit(ally);
     defer state.deinit(ally);
+    defer if (state_l2 != null) state_l2.?.deinit(ally);
+
+    const state_line2: ?*Formatter = if (state_l2 != null) &state_l2.? else null;
 
     while (true) {
-        innerMain(ally, io, client, &details, &state, signal_queue, msg_queue) catch |err| switch (err) {
+        innerMain(ally, io, client, &details, &state, state_line2, signal_queue, msg_queue) catch |err| switch (err) {
             QueueingError.UnsupportedClock, QueueingError.Unexpected => return MainError.UnsupportedClock,
             QueueingError.NoSpaceLeft => {
                 std.log.warn("activity too long to write, skipped", .{});
@@ -63,11 +72,13 @@ fn innerMain(
     client: *discord.Client,
     details: *Formatter,
     state: *Formatter,
+    state_line2: ?*Formatter,
     signal_queue: *Io.Queue(bool),
     msg_queue: *Io.Queue(discord.MsgQueueItem),
 ) QueueingError!void {
     var details_buf: [1024]u8 = undefined;
     var state_buf: [1024]u8 = undefined;
+    var state_line2_buf: [1024]u8 = undefined;
     var large_img_buf: [512]u8 = undefined;
 
     const do_seatch_albumart = config.get().search_albumart;
@@ -107,10 +118,15 @@ fn innerMain(
         const details_str = try std.fmt.bufPrint(&details_buf, "{f}", .{details});
         state.evaluate();
         const state_str = try std.fmt.bufPrint(&state_buf, "{f}", .{state});
+        const state_line2_str = if (state_line2) |state_l2| blk: {
+            state_l2.evaluate();
+            break :blk try std.fmt.bufPrint(&state_line2_buf, "{f}", .{state_l2});
+        } else null;
 
         const activity: discord.Activity = .{
             .details = details_str,
             .state = state_str,
+            .state_line2 = state_line2_str,
             .activity_type = .listening,
             .status_display_type = .state,
             .timestamps = .{ .start = start, .end = end },
