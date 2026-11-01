@@ -115,8 +115,8 @@ fn innerMain(
             .status_display_type = .state,
             .timestamps = .{ .start = start, .end = end },
             .large_image = if (global.songinfo.musicbrainz) |mbz| switch (mbz) {
-                .release => |id| std.fmt.bufPrint(&large_img_buf, "https://coverartarchive.org/release/{s}/front", .{id}) catch unreachable,
-                .release_group => |id| std.fmt.bufPrint(&large_img_buf, "https://coverartarchive.org/release-group/{s}/front", .{id}) catch unreachable,
+                .release => |id| std.fmt.bufPrint(&large_img_buf, "https://coverartarchive.org/release/{s}/front-250", .{id}) catch unreachable,
+                .release_group => |id| std.fmt.bufPrint(&large_img_buf, "https://coverartarchive.org/release-group/{s}/front-250", .{id}) catch unreachable,
             } else null,
         };
 

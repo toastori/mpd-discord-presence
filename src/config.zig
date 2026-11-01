@@ -35,7 +35,10 @@ pub fn init(gpa: Allocator, arena: Allocator, io: Io, envmap: *std.process.Envir
         Config,
         .{ .gpa = gpa, .arena = arena, .source = config_file_z, .diagnostics = &diag, .ignore_unknown_fields = true }
     ) catch |err| switch (err) {
-        error.ParseZon => std.debug.panic("{f}\n", .{diag.fmt("config_file.zon")}),
+        error.ParseZon => {
+            std.debug.print("{f}\n", .{diag.fmt("config_file.zon")});
+            std.process.exit(1);
+        },
         else => |e| return e,
     };
     zon_parsed = true;
